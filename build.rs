@@ -155,6 +155,8 @@ fn generate_bindings() {
         .clang_arg("-Ic-src/libstrophe")
         .clang_arg("-Ic-src/expat")
         .parse_callbacks(Box::new(Callbacks))
+        // C doc comments contain C code blocks that rustdoc would run as doctests
+        .generate_comments(false)
         .blocklist_type("max_align_t")
         .blocklist_type("wchar_t")
         .blocklist_type("__fsid_t")
@@ -162,6 +164,8 @@ fn generate_bindings() {
         .rustified_enum("xmpp_conn_type_t")
         .rustified_enum("xmpp_conn_event_t")
         .rustified_enum("xmpp_error_type_t")
+        .rustified_enum("xmpp_cert_element_t")
+        .rustified_enum("xmpp_queue_element_t")
         .generate()
         .expect("Unable to generate bindings");
 
