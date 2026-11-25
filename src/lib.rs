@@ -51,3 +51,6 @@ pub mod ffi;
 /// Provides TLS implementation using rustls instead of OpenSSL.
 #[cfg(feature = "tls-rustls")]
 pub mod tls_backend;
+
+/// Safe wrapper over [`ffi`]: contexts, connections, stanzas, handlers.
+pub mod xmpp;

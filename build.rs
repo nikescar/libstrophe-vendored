@@ -123,6 +123,8 @@ fn build_libstrophe(out_dir: &PathBuf) {
         _ => {}
     }
 
+    // C23 (GCC 15+ default) treats `int (*)()` as `int (*)(void)`, breaking handler.c
+    build.flag_if_supported("-std=gnu11");
     build.warnings(false);
     build.compile("strophe_vendored");
 
