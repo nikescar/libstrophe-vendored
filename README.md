@@ -18,19 +18,19 @@ Perfect for embedding XMPP in Rust mobile apps (Android/iOS), WASM, or any platf
 
 ### TLS Implementation (Complete)
 
-✅ **Phase 1 - Basic Connectivity**
+**Phase 1 - Basic Connectivity**
 - TLS handshake (`tls_start`, `tls_stop`)
 - I/O operations (`tls_read`, `tls_write`, `tls_pending`)
 - Error handling (`tls_error`, `tls_is_recoverable`)
 - Session lifecycle (`tls_new`, `tls_free`)
 
-✅ **Phase 2 - Certificate Validation**
+**Phase 2 - Certificate Validation**
 - Extract XMPP addresses from X.509 certificates (id-on-xmppAddr SAN)
 - `tls_id_on_xmppaddr()` - Get XMPP JID from certificate
 - `tls_id_on_xmppaddr_num()` - Count XMPP addresses
 - Uses x509-parser for DER/ASN.1 parsing
 
-✅ **Phase 3 - Channel Binding**
+**Phase 3 - Channel Binding**
 - tls-server-end-point (SHA-256 hash of server cert)
 - `tls_init_channel_binding()` - Initialize for SASL EXTERNAL
 - `tls_get_channel_binding_data()` - Get binding hash
@@ -52,7 +52,84 @@ libstrophe-vendored = { git = "https://github.com/nikescar/libstrophe-vendored.g
 
 ## Usage
 
-This crate provides low-level FFI bindings to libstrophe. See [`examples/ffi_connection.rs`](examples/ffi_connection.rs) for a complete example.
+### Safe API (`xmpp` module)
+
+`libstrophe_vendored::xmpp` wraps the FFI in safe Rust. Owned handles
+(`Context`, `Connection`, `Stanza`, `TlsCert`) free their C object on drop and
+deref to borrowed views (`ContextRef`, `Conn`, `StanzaRef`, `TlsCertRef`), which
+is what callbacks receive. Lifetimes tie connections and stanzas to their
+`Context`. Handlers are Rust closures.
+
+```rust,no_run
+use libstrophe_vendored::xmpp::{Connection, Context, EventKind, LogLevel, Stanza, NS_ROSTER};
+
+let ctx = Context::with_default_logger(LogLevel::Debug);
+let conn = Connection::new(&ctx);
+conn.set_jid("user@example.com").unwrap();
+conn.set_pass("password").unwrap();
+
+conn.connect_client(None, 0, |conn, event| match event.kind {
+    EventKind::Connect => {
+        let ctx = conn.context();
+        let mut iq = Stanza::iq(ctx, "get", "roster1").unwrap();
+        let mut query = Stanza::new(ctx);
+        query.set_name("query").unwrap();
+        query.set_ns(NS_ROSTER).unwrap();
+        iq.add_child(query).unwrap();
+
+        conn.id_handler_add("roster1", |conn, reply| {
+            if let Some(query) = reply.child_by_name("query") {
+                for item in query.children() {
+                    println!("{}", item.attribute("jid").unwrap_or("?"));
+                }
+            }
+            conn.disconnect();
+            false // one-shot: unregister
+        })
+        .unwrap();
+        conn.send(&iq);
+    }
+    _ => conn.context().stop(),
+})
+.unwrap();
+ctx.run();
+```
+
+Notes:
+
+- `xmpp_initialize()` runs once on first `Context` creation; `xmpp_shutdown()` is never called.
+- Handler closures are freed when their `Connection` is dropped.
+- `Conn::handler_delete` disables a handler; libstrophe drops it the next time it would fire.
+- A panic inside a callback aborts the process (unwinding into C is not allowed).
+
+### Examples
+
+Rust ports of the upstream libstrophe C examples, written without `unsafe`:
+
+| Example | Upstream | Shows |
+|---------|----------|-------|
+| `uuid` | `uuid.c` | UUID generation |
+| `basic` | `basic.c` | Connect/disconnect, connection flags |
+| `active` | `active.c` | iq + id handler (disco#items sessions) |
+| `roster` | `roster.c` | Roster query |
+| `component` | `component.c` | External component connection |
+| `vcard` | `vcard.c` | Raw send, id + timed handlers, base64 photo |
+| `bot` | `bot.c` | Stanza handlers, replies, Stream Management reconnect |
+| `complex` | `complex.c` | TLS options, certificate printing, certfail, sockopt |
+| `register` | `register.c` | Raw connection, STARTTLS, in-band registration |
+
+```bash
+cargo run --example basic -- --jid user@example.com --pass password
+cargo run --example roster -- user@example.com password
+```
+
+Differences from the C versions: password prompts echo input, ports parse as
+decimal only, and missing elements print a message instead of crashing.
+
+### Raw FFI
+
+The `ffi` module exposes the C API directly. See
+[`examples/ffi_connection.rs`](examples/ffi_connection.rs) for a complete example.
 
 ```rust
 use libstrophe_vendored::ffi;
@@ -123,6 +200,9 @@ cargo run --example ffi_connection
 cargo build --release
 ```
 
+The C sources are compiled with `-std=gnu11`; GCC 15+ defaults to C23, which
+libstrophe's handler code does not compile under.
+
 ### Cross-Compilation (Android)
 
 ```bash
@@ -148,18 +228,24 @@ cargo test
 # Integration tests
 cargo test --test integration
 
+# Safe API tests (uses a local fake XMPP server, no network needed)
+cargo test --test safe_api
+
 # Specific test
 cargo test test_tls_backend_lifecycle
 ```
-
-**Test coverage:** 15/15 tests passing (11 unit + 4 integration)
 
 ## Architecture
 
 ```
 ┌─────────────────────────────────────────┐
 │          Rust Application               │
-│           (FFI bindings)                │
+└─────────────────────────────────────────┘
+                 │
+                 ▼
+┌─────────────────────────────────────────┐
+│        Safe API (xmpp module)           │
+│  (owned/borrowed handles, closures)     │
 └─────────────────────────────────────────┘
                  │
                  ▼
@@ -197,14 +283,15 @@ libstrophe-vendored/
 │   └── tls_rustls_glue.c    # C accessor functions for Rust TLS
 ├── src/
 │   ├── ffi.rs               # Pre-generated C bindings
-│   ├── lib.rs               # Library root (re-exports ffi + tls_backend)
+│   ├── lib.rs               # Library root (ffi, xmpp, tls_backend)
+│   ├── xmpp/                # Safe wrapper (context, connection, stanza, cert)
 │   └── tls_backend/
 │       ├── session.rs       # TLS session (rustls wrapper)
 │       ├── cert.rs          # Certificate parsing (x509-parser)
 │       └── ffi.rs           # C FFI exports for TLS
 ├── build.rs                 # Compile C sources via cc crate
-├── examples/                # Usage examples
-└── tests/                   # Integration tests
+├── examples/                # Safe ports of upstream examples + ffi_connection
+└── tests/                   # Smoke, integration, safe API tests
 ```
 
 ## Dependencies
