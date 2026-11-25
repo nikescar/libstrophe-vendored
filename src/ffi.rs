@@ -29,6 +29,7 @@ pub const XMPP_CONN_FLAG_LEGACY_AUTH: ::std::os::raw::c_long = 16;
 pub const XMPP_CONN_FLAG_DISABLE_SM: ::std::os::raw::c_long = 32;
 pub const XMPP_CONN_FLAG_ENABLE_COMPRESSION: ::std::os::raw::c_long = 64;
 pub const XMPP_CONN_FLAG_COMPRESSION_DONT_RESET: ::std::os::raw::c_long = 128;
+pub const XMPP_CONN_FLAG_DIRECT_TLS: ::std::os::raw::c_long = 4;
 pub const XMPP_SHA1_DIGEST_SIZE: u32 = 20;
 pub type __u_char = ::std::os::raw::c_uchar;
 pub type __u_short = ::std::os::raw::c_ushort;
@@ -276,7 +277,8 @@ pub enum xmpp_cert_element_t {
 	XMPP_CERT_SIGALG = 7,
 	XMPP_CERT_FINGERPRINT_SHA1 = 8,
 	XMPP_CERT_FINGERPRINT_SHA256 = 9,
-	XMPP_CERT_ELEMENT_MAX = 10,
+	XMPP_CERT_PUBKEY_FINGERPRINT_SHA256 = 10,
+	XMPP_CERT_ELEMENT_MAX = 11,
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -778,6 +780,9 @@ unsafe extern "C" {
 }
 unsafe extern "C" {
 	pub fn xmpp_tlscert_get_conn(cert: *const xmpp_tlscert_t) -> *mut xmpp_conn_t;
+}
+unsafe extern "C" {
+	pub fn xmpp_tlscert_get_userdata(cert: *const xmpp_tlscert_t) -> *mut ::std::os::raw::c_void;
 }
 unsafe extern "C" {
 	pub fn xmpp_tlscert_get_pem(cert: *const xmpp_tlscert_t) -> *const ::std::os::raw::c_char;

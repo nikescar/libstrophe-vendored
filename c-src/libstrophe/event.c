@@ -39,7 +39,7 @@
 #include <sys/select.h>
 #include <errno.h>
 #include <unistd.h>
-#define _sleep(x) usleep((x)*1000)
+#define _sleep(x) usleep((x) * 1000)
 #else
 #include <winsock2.h>
 #ifndef ETIMEDOUT
@@ -174,6 +174,7 @@ void xmpp_run_once(xmpp_ctx_t *ctx, unsigned long timeout)
             /* if we've sent everything update the tail */
             if (!sq)
                 conn->send_queue_tail = NULL;
+            trigger_sm_callback(conn);
         }
         intf->flush(intf);
 

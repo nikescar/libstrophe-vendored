@@ -89,18 +89,10 @@ fn build_libstrophe(out_dir: &PathBuf) {
         "c-src/libstrophe/uuid.c",
     ];
 
-    // Backend selection based on features
-    #[cfg(feature = "tls-rustls")]
-    {
-        // rustls backend: Rust FFI provides TLS functions, C glue provides accessors
-        strophe_sources.push("c-src/tls_rustls_glue.c");
-    }
-
+    // rustls backend: Rust FFI provides TLS functions, C glue provides accessors
     #[cfg(not(feature = "tls-rustls"))]
-    {
-        // Dummy backend: no TLS support
-        strophe_sources.push("c-src/libstrophe/tls_dummy.c");
-    }
+    compile_error!("the `tls-rustls` feature is required (it is the only TLS backend)");
+    strophe_sources.push("c-src/tls_rustls_glue.c");
 
     build
         .files(strophe_sources.iter())

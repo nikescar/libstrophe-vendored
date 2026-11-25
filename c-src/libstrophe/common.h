@@ -29,13 +29,44 @@
 #include "parser.h"
 #include "snprintf.h"
 
+/** Define your own `STROPHE_STATIC_ASSERT` if your compiler doesn't support one
+ * of the below ones or define as noop if your compiler provides no replacement.
+ */
+#if !defined(STROPHE_STATIC_ASSERT)
+#if (__STDC_VERSION__ >= 202000L)
+#define STROPHE_STATIC_ASSERT(cond, msg) static_assert(cond, msg)
+#else
+#define STROPHE_STATIC_ASSERT(cond, msg) _Static_assert(cond, msg)
+#endif
+#endif
+
+#if !defined(STROPHE_ASSERT)
+#if defined(NDEBUG)
+#define STROPHE_ASSERT(x, r) \
+    if (!(x))                \
+        return (r);
+#define STROPHE_ASSERTVD(x) \
+    if (!(x))               \
+        return;
+#else
+#include <assert.h>
+#define STROPHE_ASSERT(x, r) assert(x)
+#define STROPHE_ASSERTVD(x) assert(x)
+#endif
+#endif /* STROPHE_ASSERT */
+
 /** handlers **/
+#if (__STDC_VERSION__ >= 202000L)
+typedef void *xmpp_void_handler;
+#else
+typedef int (*xmpp_void_handler)();
+#endif
 
 typedef struct _xmpp_handlist_t xmpp_handlist_t;
 struct _xmpp_handlist_t {
     /* common members */
     int user_handler;
-    int (*handler)();
+    xmpp_void_handler handler;
     void *userdata;
     int enabled; /* handlers are added disabled and enabled after the
                   * handler chain is processed to prevent stanzas from
@@ -175,9 +206,11 @@ struct _xmpp_send_queue_t {
 #define SASL_MASK_EXTERNAL (1 << 6)
 #define SASL_MASK_SCRAMSHA1_PLUS (1 << 7)
 #define SASL_MASK_SCRAMSHA256_PLUS (1 << 8)
+#define SASL_MASK_SCRAMSHA512_PLUS (1 << 9)
 
-#define SASL_MASK_SCRAM_PLUS \
-    (SASL_MASK_SCRAMSHA1_PLUS | SASL_MASK_SCRAMSHA256_PLUS)
+#define SASL_MASK_SCRAM_PLUS                                 \
+    (SASL_MASK_SCRAMSHA1_PLUS | SASL_MASK_SCRAMSHA256_PLUS | \
+     SASL_MASK_SCRAMSHA512_PLUS)
 #define SASL_MASK_SCRAM_WEAK \
     (SASL_MASK_SCRAMSHA1 | SASL_MASK_SCRAMSHA256 | SASL_MASK_SCRAMSHA512)
 #define SASL_MASK_SCRAM (SASL_MASK_SCRAM_PLUS | SASL_MASK_SCRAM_WEAK)
@@ -321,6 +354,8 @@ struct _xmpp_conn_t {
     hash_t *id_handlers;
     xmpp_handlist_t *handlers;
     xmpp_sockopt_callback sockopt_cb;
+    xmpp_sm_callback sm_callback;
+    void *sm_callback_ctx;
 };
 
 void conn_disconnect(xmpp_conn_t *conn);
@@ -374,6 +409,7 @@ void handler_add(xmpp_conn_t *conn,
 void handler_system_delete_all(xmpp_conn_t *conn);
 
 /* utility functions */
+void trigger_sm_callback(xmpp_conn_t *conn);
 void reset_sm_state(xmpp_sm_state_t *sm_state);
 void disconnect_mem_error(xmpp_conn_t *conn);
 

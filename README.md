@@ -39,7 +39,6 @@ Perfect for embedding XMPP in Rust mobile apps (Android/iOS), WASM, or any platf
 ### Cargo Features
 
 - `tls-rustls` *(default)* - rustls + ring TLS backend
-- `tls-dummy` - No TLS support (testing only)
 - `libstrophe-0_14` *(default)* - Latest libstrophe API version
 - `buildtime_bindgen` - Regenerate bindings (requires libclang)
 
@@ -307,7 +306,7 @@ libstrophe-vendored/
 
 ### C Source (Vendored)
 
-- **libstrophe** 0.14 - XMPP client library (MIT OR GPL-3.0, using MIT)
+- **libstrophe** master (0.14.0-26-gf549850) - XMPP client library (MIT OR GPL-3.0, using MIT)
 - **expat** 2.6.4 - XML parser (MIT)
 
 ## Security
