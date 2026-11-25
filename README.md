@@ -116,6 +116,7 @@ Rust ports of the upstream libstrophe C examples, written without `unsafe`:
 | `bot` | `bot.c` | Stanza handlers, replies, Stream Management reconnect |
 | `complex` | `complex.c` | TLS options, certificate printing, certfail, sockopt |
 | `register` | `register.c` | Raw connection, STARTTLS, in-band registration |
+| `chat_actor` | (none) | Actor thread owns `Context`; presence broadcast (show/status), echo reply, cross-thread send queue |
 
 ```bash
 cargo run --example basic -- --jid user@example.com --pass password
