@@ -1,0 +1,7 @@
+# Vendored C library versions
+libstrophe: 0.13.1 (latest stable as of 2024)
+expat: 2.6.4 (R_2_6_4)
+
+# Source URLs
+libstrophe: https://github.com/strophe/libstrophe/releases/tag/0.13.1
+expat: https://github.com/libexpat/libexpat/releases/tag/R_2_6_4
