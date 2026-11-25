@@ -28,7 +28,6 @@ socket2 = { version = "0.6", features = ["all"] }
 default = ["libstrophe-0_14", "tls-rustls"]
 buildtime_bindgen = ["bindgen"]
 tls-rustls = ["dep:rustls", "dep:webpki-roots", "dep:rustls-pki-types", "dep:x509-parser", "dep:sha2"]
-tls-dummy = []
 libstrophe-0_9_3 = []
 libstrophe-0_10_0 = ["libstrophe-0_9_3"]
 libstrophe-0_11_0 = ["libstrophe-0_10_0"]

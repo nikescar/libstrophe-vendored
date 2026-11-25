@@ -39,7 +39,6 @@ Perfect for embedding XMPP in Rust mobile apps (Android/iOS), WASM, or any platf
 ### Cargo Features
 
 - `tls-rustls` *(default)* - rustls + ring TLS backend
-- `tls-dummy` - No TLS support (testing only)
 - `libstrophe-0_14` *(default)* - Latest libstrophe API version
 - `buildtime_bindgen` - Regenerate bindings (requires libclang)
 
@@ -117,6 +116,7 @@ Rust ports of the upstream libstrophe C examples, written without `unsafe`:
 | `bot` | `bot.c` | Stanza handlers, replies, Stream Management reconnect |
 | `complex` | `complex.c` | TLS options, certificate printing, certfail, sockopt |
 | `register` | `register.c` | Raw connection, STARTTLS, in-band registration |
+| `chat_actor` | (none) | Actor thread owns `Context`; presence broadcast (show/status), echo reply, cross-thread send queue |
 
 ```bash
 cargo run --example basic -- --jid user@example.com --pass password
@@ -307,7 +307,7 @@ libstrophe-vendored/
 
 ### C Source (Vendored)
 
-- **libstrophe** 0.14 - XMPP client library (MIT OR GPL-3.0, using MIT)
+- **libstrophe** master (0.14.0-26-gf549850) - XMPP client library (MIT OR GPL-3.0, using MIT)
 - **expat** 2.6.4 - XML parser (MIT)
 
 ## Security

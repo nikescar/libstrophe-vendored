@@ -186,25 +186,41 @@ fn connection_settings_roundtrip() -> Result<()> {
 /// Fake XMPP server: accepts one connection, optionally replies with `script`
 /// after the client sends its stream header, then waits for the client to close.
 fn fake_server(script: Option<String>) -> u16 {
+    recording_server(script).0
+}
+
+/// [`fake_server`] that also yields everything the client sent. Closes as
+/// soon as the client closes its stream.
+fn recording_server(script: Option<String>) -> (u16, std::sync::mpsc::Receiver<String>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
+    let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let (mut sock, _) = listener.accept().unwrap();
         sock.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
         let mut buf = [0u8; 4096];
+        let mut seen = Vec::new();
+        let mut read = |sock: &mut std::net::TcpStream, seen: &mut Vec<u8>| match sock.read(&mut buf) {
+            Ok(0) | Err(_) => false,
+            Ok(n) => {
+                seen.extend_from_slice(&buf[..n]);
+                true
+            }
+        };
+        let text = |seen: &[u8]| String::from_utf8_lossy(seen).into_owned();
         if let Some(script) = script {
-            let mut seen = Vec::new();
-            while !String::from_utf8_lossy(&seen).contains("<stream:stream") {
-                match sock.read(&mut buf) {
-                    Ok(0) | Err(_) => return,
-                    Ok(n) => seen.extend_from_slice(&buf[..n]),
+            while !text(&seen).contains("<stream:stream") {
+                if !read(&mut sock, &mut seen) {
+                    let _ = tx.send(text(&seen));
+                    return;
                 }
             }
             sock.write_all(script.as_bytes()).unwrap();
         }
-        while matches!(sock.read(&mut buf), Ok(n) if n > 0) {}
+        while !text(&seen).contains("</stream:stream>") && read(&mut sock, &mut seen) {}
+        let _ = tx.send(text(&seen));
     });
-    port
+    (port, rx)
 }
 
 const STREAM_HEADER: &str = "<?xml version='1.0'?><stream:stream xmlns='jabber:client' \
@@ -353,4 +369,118 @@ fn connection_failure_reports_event() {
     let (kind, error) = got.get().unwrap();
     assert_eq!(kind, EventKind::Disconnect);
     assert_ne!(error, 0);
+}
+
+/// Pattern for an actor thread that owns the (`!Send`) Context: every callback
+/// builds stanzas from `conn.context()`; other threads queue outgoing messages
+/// over a channel that a timed handler drains.
+#[test]
+fn callbacks_send_presence_reply_and_queued_messages() {
+    let (port, sent) = recording_server(Some(format!(
+        "{STREAM_HEADER}<message from='a@localhost/r' to='localhost' type='chat' id='m1'>\
+         <body>hi</body></message>"
+    )));
+    let (out_tx, out_rx) = std::sync::mpsc::channel::<(String, String)>();
+    std::thread::spawn(move || {
+        out_tx.send(("bob@localhost".into(), "queued hi".into())).unwrap();
+    });
+
+    let ctx = Context::new();
+    let conn = raw_conn(&ctx);
+    let replied = Rc::new(Cell::new(false));
+    let disconnected = Rc::new(Cell::new(false));
+    let (r, dc) = (replied.clone(), disconnected.clone());
+    let out_rx = Rc::new(out_rx);
+    conn.connect_raw(Some("127.0.0.1"), port, move |c, event| match event.kind {
+        EventKind::RawConnect => c.open_stream_default().unwrap(),
+        EventKind::Connect => {
+            c.send(&Stanza::presence(c.context()).unwrap());
+
+            let r1 = r.clone();
+            c.handler_add(None, Some("message"), Some("chat"), move |c, st| {
+                let mut reply = st.reply().unwrap();
+                reply.set_body(&format!("echo: {}", st.body().unwrap())).unwrap();
+                c.send(&reply);
+                r1.set(true);
+                true
+            })
+            .unwrap();
+
+            let (r2, rx) = (r.clone(), out_rx.clone());
+            let mut queued = 0;
+            c.timed_handler_add(Duration::from_millis(5), move |c| {
+                while let Ok((to, body)) = rx.try_recv() {
+                    let mut msg = Stanza::message(c.context(), Some("chat"), &to, None).unwrap();
+                    msg.set_body(&body).unwrap();
+                    c.send(&msg);
+                    queued += 1;
+                }
+                if queued == 1 && r2.get() {
+                    c.disconnect();
+                    return false;
+                }
+                true
+            });
+        }
+        _ => dc.set(true),
+    })
+    .unwrap();
+    run_until(&ctx, || disconnected.get());
+
+    let xml = sent.recv_timeout(Duration::from_secs(10)).unwrap();
+    assert!(xml.contains("<presence/>"), "{xml}");
+    assert!(xml.contains("to=\"a@localhost/r\""), "{xml}");
+    assert!(xml.contains("<body>echo: hi</body>"), "{xml}");
+    assert!(xml.contains("to=\"bob@localhost\""), "{xml}");
+    assert!(xml.contains("<body>queued hi</body>"), "{xml}");
+}
+
+/// `<name>text</name>` child, built from the stanza's own context.
+fn text_child<'a>(ctx: &'a ContextRef, name: &str, text: &str) -> Result<Stanza<'a>> {
+    let mut elem = Stanza::new(ctx);
+    elem.set_name(name)?;
+    let mut t = Stanza::new(ctx);
+    t.set_text(text)?;
+    elem.add_child(t)?;
+    Ok(elem)
+}
+
+/// Presence update (show + status) queued from another thread and broadcast
+/// from a timed handler using `conn.context()`.
+#[test]
+fn queued_presence_update_carries_show_and_status() {
+    let (port, sent) = recording_server(Some(STREAM_HEADER.to_owned()));
+    let (tx, rx) = std::sync::mpsc::channel::<(String, String)>();
+    std::thread::spawn(move || tx.send(("away".into(), "In a meeting".into())).unwrap());
+
+    let ctx = Context::new();
+    let conn = raw_conn(&ctx);
+    let disconnected = Rc::new(Cell::new(false));
+    let dc = disconnected.clone();
+    let rx = Rc::new(rx);
+    conn.connect_raw(Some("127.0.0.1"), port, move |c, event| match event.kind {
+        EventKind::RawConnect => c.open_stream_default().unwrap(),
+        EventKind::Connect => {
+            let rx = rx.clone();
+            c.timed_handler_add(Duration::from_millis(5), move |c| {
+                let Ok((show, status)) = rx.try_recv() else { return true };
+                let ctx = c.context();
+                let mut pres = Stanza::presence(ctx).unwrap();
+                pres.add_child(text_child(ctx, "show", &show).unwrap()).unwrap();
+                pres.add_child(text_child(ctx, "status", &status).unwrap()).unwrap();
+                c.send(&pres);
+                c.disconnect();
+                false
+            });
+        }
+        _ => dc.set(true),
+    })
+    .unwrap();
+    run_until(&ctx, || disconnected.get());
+
+    let xml = sent.recv_timeout(Duration::from_secs(10)).unwrap();
+    assert!(
+        xml.contains("<presence><show>away</show><status>In a meeting</status></presence>"),
+        "{xml}"
+    );
 }

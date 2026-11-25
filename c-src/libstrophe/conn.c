@@ -21,6 +21,9 @@
  */
 
 #include <errno.h>
+#if !defined(_MSC_VER) && !defined(_WIN32)
+#include <netinet/in.h>
+#endif
 #include <stdarg.h>
 #include <string.h>
 #include <limits.h>
@@ -1092,6 +1095,7 @@ int conn_tls_start(xmpp_conn_t *conn)
     }
 
     if (conn->tls != NULL) {
+        struct conn_interface old_intf = conn->intf;
         conn->intf = tls_intf;
         conn->intf.conn = conn;
         if (tls_start(conn->tls)) {
@@ -1102,6 +1106,7 @@ int conn_tls_start(xmpp_conn_t *conn)
             tls_free(conn->tls);
             conn->tls = NULL;
             conn->tls_failed = 1;
+            conn->intf = old_intf;
         }
     }
     if (rc != 0) {
@@ -1252,34 +1257,334 @@ int xmpp_conn_is_disconnected(xmpp_conn_t *conn)
 }
 
 /**
- *  This returns the Stream Management state of a connection object after
- *  it has been disconnected.
- *  One can then initialise a fresh connection object and set this Stream
- *  Management state by calling \ref xmpp_conn_set_sm_state
+ *  This sets the Stream Management callback function
  *
- *  In case one wants to dispose of the state w/o setting it into a fresh
- *  connection object, one can call \ref xmpp_free_sm_state
+ *  After setting this API, the library will call the given callback function
+ *  each time when the internal SM state is updated.
  *
- *  After calling this function to retrieve the state, only call one of the
- *  other two.
+ *  This can be used in conjunction with \ref xmpp_conn_restore_sm_state to
+ *  e.g. implement a mechanism that retains an SM state over potential
+ *  application terminations.
  *
  *  @param conn   a Strophe connection object
- *  @return The Stream Management state of the connection or NULL on error
+ *  @param cb     a callback function or NULL to disable
+ *  @param ctx    a context that will be passed on invocation of the callback
+ *                function
  *
  *  @ingroup Connections
  */
-xmpp_sm_state_t *xmpp_conn_get_sm_state(xmpp_conn_t *conn)
+void xmpp_conn_set_sm_callback(xmpp_conn_t *conn,
+                               xmpp_sm_callback cb,
+                               void *ctx)
 {
-    xmpp_sm_state_t *ret;
+    conn->sm_callback = cb;
+    conn->sm_callback_ctx = ctx;
+}
 
-    /* We can only return the SM state when we're disconnected */
-    if (conn->state != XMPP_STATE_DISCONNECTED)
-        return NULL;
+struct sm_restore {
+    xmpp_conn_t *conn;
+    const unsigned char *state;
+    const unsigned char *const state_end, *const orig;
+};
 
-    ret = conn->sm_state;
-    conn->sm_state = NULL;
+static int sm_load_u32(struct sm_restore *sm, uint8_t type, uint32_t *val)
+{
+    if (*sm->state != type) {
+        strophe_error(
+            sm->conn->ctx, "conn",
+            "Invalid CBOR type at position %u: 0x%02x, expected: 0x%02x",
+            sm->state - sm->orig, *sm->state, type);
+        return XMPP_EINVOP;
+    }
+    sm->state++;
+    if ((sm->state + 4) > sm->state_end) {
+        strophe_error(sm->conn->ctx, "conn",
+                      "Provided sm_state data is too short");
+        return XMPP_EINVOP;
+    }
+    uint32_t v;
+    memcpy(&v, sm->state, 4);
+    sm->state += 4;
+    *val = ntohl(v);
+    return 0;
+}
 
+static int sm_load_string(struct sm_restore *sm, char **val, size_t *len)
+{
+    uint32_t l;
+    int ret = sm_load_u32(sm, 0x7a, &l);
+    if (ret)
+        return ret;
+    if ((sm->state + l) > sm->state_end) {
+        strophe_error(sm->conn->ctx, "conn",
+                      "Provided sm_state data is too short");
+        return XMPP_EINVOP;
+    }
+    *val = strophe_alloc(sm->conn->ctx, l + 1);
+    if (!*val)
+        return XMPP_EMEM;
+    memcpy(*val, sm->state, l);
+    (*val)[l] = '\0';
+    sm->state += l;
+    *len = l;
+    return 0;
+}
+
+/**
+ *  This restores the serialized Stream Management state
+ *
+ *  After setting this API, the library will call the given callback function
+ *  each time when the internal SM state is updated.
+ *
+ *  This can be used in conjunction with \ref xmpp_conn_restore_sm_state to
+ *  e.g. implement a mechanism that retains an SM state over potential
+ *  application terminations.
+ *
+ *  @param conn            a Strophe connection object
+ *  @param sm_state        a buffer as passed to the SM callback
+ *  @param sm_state_len    the length of `sm_state`
+ *
+ *  @ingroup Connections
+ */
+int xmpp_conn_restore_sm_state(xmpp_conn_t *conn,
+                               const unsigned char *sm_state,
+                               size_t sm_state_len)
+{
+    /* We can only set the SM state when we're disconnected */
+    if (conn->state != XMPP_STATE_DISCONNECTED) {
+        strophe_error(conn->ctx, "conn",
+                      "SM state can only be set the when we're disconnected");
+        return XMPP_EINVOP;
+    }
+
+    if (conn->sm_state) {
+        strophe_error(conn->ctx, "conn", "SM state is already set!");
+        return XMPP_EINVOP;
+    }
+
+    if (sm_state_len < 5 * 6) {
+        strophe_error(conn->ctx, "conn", "Provided sm_state data is too short");
+        return XMPP_EINVOP;
+    }
+    struct sm_restore sm = {.conn = conn,
+                            .state = sm_state,
+                            .state_end = sm_state + sm_state_len,
+                            .orig = sm_state};
+    /* Check for pointer wrap-around, which should never happen */
+    if (sm.state_end < sm.state) {
+        strophe_error(conn->ctx, "conn",
+                      "Internal error, pointer wrapped around");
+        return XMPP_EINVOP;
+    }
+
+    if (memcmp(sm.state, "\x1a\x00\x00\x00\x00", 5) != 0) {
+        strophe_error(conn->ctx, "conn", "Unknown sm_state version");
+        return XMPP_EINVOP;
+    }
+    sm.state += 5;
+
+    conn->sm_state = strophe_alloc(conn->ctx, sizeof(*conn->sm_state));
+    if (!conn->sm_state)
+        return XMPP_EMEM;
+
+    memset(conn->sm_state, 0, sizeof(*conn->sm_state));
+    conn->sm_state->ctx = conn->ctx;
+
+    conn->sm_state->sm_support = 1;
+    conn->sm_state->sm_enabled = 1;
+    conn->sm_state->can_resume = 1;
+    conn->sm_state->resume = 1;
+
+    int ret;
+    ret = sm_load_u32(&sm, 0x1a, &conn->sm_state->sm_sent_nr);
+    if (ret)
+        goto err_reload;
+
+    ret = sm_load_u32(&sm, 0x1a, &conn->sm_state->sm_handled_nr);
+    if (ret)
+        goto err_reload;
+
+    size_t id_len;
+    ret = sm_load_string(&sm, &conn->sm_state->id, &id_len);
+    if (ret)
+        goto err_reload;
+
+    uint32_t len, i;
+    ret = sm_load_u32(&sm, 0x9a, &len);
+    if (ret)
+        goto err_reload;
+    conn->send_queue_user_len = conn->send_queue_len = len;
+    for (i = 0; i < len; i++) {
+        xmpp_send_queue_t *item = strophe_alloc(conn->ctx, sizeof(*item));
+        if (!item) {
+            ret = XMPP_EMEM;
+            goto err_reload;
+        }
+        memset(item, 0, sizeof(*item));
+
+        if (!conn->send_queue_tail) {
+            conn->send_queue_head = item;
+            conn->send_queue_tail = item;
+        } else {
+            conn->send_queue_tail->next = item;
+            conn->send_queue_tail = item;
+        }
+
+        ret = sm_load_string(&sm, &item->data, &item->len);
+        if (ret)
+            goto err_reload;
+
+        item->owner = XMPP_QUEUE_USER;
+    }
+
+    ret = sm_load_u32(&sm, 0xba, &len);
+    if (ret)
+        goto err_reload;
+    for (i = 0; i < len; i++) {
+        xmpp_send_queue_t *item = strophe_alloc(conn->ctx, sizeof(*item));
+        if (!item) {
+            ret = XMPP_EMEM;
+            goto err_reload;
+        }
+        memset(item, 0, sizeof(*item));
+
+        add_queue_back(&conn->sm_state->sm_queue, item);
+
+        ret = sm_load_u32(&sm, 0x1a, &item->sm_h);
+        if (ret)
+            goto err_reload;
+        ret = sm_load_string(&sm, &item->data, &item->len);
+        if (ret)
+            goto err_reload;
+
+        item->owner = XMPP_QUEUE_USER;
+    }
+
+    return XMPP_EOK;
+
+err_reload:
+    xmpp_free_sm_state(conn->sm_state);
     return ret;
+}
+
+static int sm_store_u32(unsigned char **next_,
+                        const unsigned char *const end,
+                        uint8_t type,
+                        uint32_t val)
+{
+    unsigned char *next = *next_;
+    if (next + 5 > end)
+        return 1;
+    *next++ = type;
+    uint32_t v = htonl(val);
+    memcpy(next, &v, 4);
+    next += 4;
+    *next_ = next;
+    return 0;
+}
+
+static size_t sm_state_serialize(xmpp_conn_t *conn, unsigned char **buf)
+{
+    if (!conn->sm_state->sm_support || !conn->sm_state->sm_enabled ||
+        !conn->sm_state->can_resume) {
+        *buf = NULL;
+        return 0;
+    }
+
+    uint32_t id_len = strlen(conn->sm_state->id);
+    xmpp_send_queue_t *peek = conn->sm_state->sm_queue.head;
+    size_t sm_queue_len = 0;
+    size_t sm_queue_size = 0;
+    while (peek) {
+        sm_queue_len++;
+        sm_queue_size += 10 + peek->len;
+        peek = peek->next;
+    }
+
+    uint32_t send_queue_len = 0;
+    size_t send_queue_size = 0;
+    peek = conn->send_queue_head;
+    while (peek) {
+        send_queue_len++;
+        send_queue_size += 5 + peek->len;
+        peek = peek->next;
+    }
+
+    size_t buf_size =
+        5 + 5 + 5 + 5 + id_len + 5 + send_queue_size + 5 + sm_queue_size;
+    *buf = strophe_alloc(conn->ctx, buf_size);
+    if (*buf == NULL)
+        return 0;
+    unsigned char *next = *buf;
+    const unsigned char *const end = next + buf_size;
+    /* Check for pointer wrap-around, which should never happen */
+    if (end < next) {
+        strophe_error(conn->ctx, "conn",
+                      "Internal error, pointer wrapped around");
+        return 0;
+    }
+
+    memcpy(next, "\x1a\x00\x00\x00\x00", 5); // Version
+    next += 5;
+
+    if (sm_store_u32(&next, end, 0x1a, conn->sm_state->sm_sent_nr))
+        goto err_serialize;
+    if (sm_store_u32(&next, end, 0x1a, conn->sm_state->sm_handled_nr))
+        goto err_serialize;
+
+    if (sm_store_u32(&next, end, 0x7a, id_len))
+        goto err_serialize;
+    memcpy(next, conn->sm_state->id, id_len);
+    next += id_len;
+
+    if (sm_store_u32(&next, end, 0x9a, send_queue_len))
+        goto err_serialize;
+
+    peek = conn->send_queue_head;
+    while (peek) {
+        if (sm_store_u32(&next, end, 0x7a, (uint32_t)peek->len))
+            goto err_serialize;
+        if (next + peek->len > end)
+            goto err_serialize;
+        memcpy(next, peek->data, peek->len);
+        next += peek->len;
+        peek = peek->next;
+    }
+
+    if (sm_store_u32(&next, end, 0xba, sm_queue_len))
+        goto err_serialize;
+
+    peek = conn->sm_state->sm_queue.head;
+    while (peek) {
+        if (sm_store_u32(&next, end, 0x1a, peek->sm_h))
+            goto err_serialize;
+
+        if (sm_store_u32(&next, end, 0x7a, (uint32_t)peek->len))
+            goto err_serialize;
+        if (next + peek->len > end)
+            goto err_serialize;
+        memcpy(next, peek->data, peek->len);
+        next += peek->len;
+        peek = peek->next;
+    }
+
+    return buf_size;
+
+err_serialize:
+    strophe_error(conn->ctx, "conn", "Can't serialize more data, buffer full");
+    strophe_free(conn->ctx, buf);
+    return 0;
+}
+
+void trigger_sm_callback(xmpp_conn_t *conn)
+{
+    if (!conn || !conn->sm_callback)
+        return;
+
+    unsigned char *buf;
+    size_t size = sm_state_serialize(conn, &buf);
+    conn->sm_callback(conn, conn->sm_callback_ctx, buf, size);
+    strophe_free(conn->ctx, buf);
 }
 
 static void _reset_sm_state_for_reconnect(xmpp_conn_t *conn)
@@ -1308,6 +1613,37 @@ static void _reset_sm_state_for_reconnect(xmpp_conn_t *conn)
         xmpp_stanza_release(s->bind);
         s->bind = NULL;
     }
+}
+
+/**
+ *  This returns the Stream Management state of a connection object after
+ *  it has been disconnected.
+ *  One can then initialise a fresh connection object and set this Stream
+ *  Management state by calling \ref xmpp_conn_set_sm_state
+ *
+ *  In case one wants to dispose of the state w/o setting it into a fresh
+ *  connection object, one can call \ref xmpp_free_sm_state
+ *
+ *  After calling this function to retrieve the state, only call one of the
+ *  other two.
+ *
+ *  @param conn   a Strophe connection object
+ *  @return The Stream Management state of the connection or NULL on error
+ *
+ *  @ingroup Connections
+ */
+xmpp_sm_state_t *xmpp_conn_get_sm_state(xmpp_conn_t *conn)
+{
+    xmpp_sm_state_t *ret;
+
+    /* We can only return the SM state when we're disconnected */
+    if (conn->state != XMPP_STATE_DISCONNECTED)
+        return NULL;
+
+    ret = conn->sm_state;
+    conn->sm_state = NULL;
+
+    return ret;
 }
 
 /**
@@ -1435,6 +1771,7 @@ char *xmpp_conn_send_queue_drop_element(xmpp_conn_t *conn,
                                         xmpp_queue_element_t which)
 {
     xmpp_send_queue_t *t;
+    int disconnected = conn->state == XMPP_STATE_DISCONNECTED;
 
     /* Fast return paths */
     /* empty queue */
@@ -1443,7 +1780,7 @@ char *xmpp_conn_send_queue_drop_element(xmpp_conn_t *conn,
     /* one element in queue */
     if (conn->send_queue_head == conn->send_queue_tail) {
         /* head is already sent out partially */
-        if (conn->send_queue_head->wip)
+        if (conn->send_queue_head->wip && !disconnected)
             return NULL;
         /* the element is no USER element */
         if (conn->send_queue_head->owner != XMPP_QUEUE_USER)
@@ -1467,7 +1804,7 @@ char *xmpp_conn_send_queue_drop_element(xmpp_conn_t *conn,
         return NULL;
 
     /* head is already sent out partially */
-    if (t == conn->send_queue_head && t->wip)
+    if (t == conn->send_queue_head && t->wip && !disconnected)
         t = t->next;
 
     /* search forward to find the first USER element */
@@ -1481,10 +1818,15 @@ char *xmpp_conn_send_queue_drop_element(xmpp_conn_t *conn,
     /* In case there exists a SM stanza that is linked to the
      * one we're currently dropping, also delete that one.
      */
-    if (t->next && t->next->userdata == t)
+    if (t->next && t->next->userdata == t) {
         strophe_free(conn->ctx, _drop_send_queue_element(conn, t->next));
+        /* reset the flag, so we restart to send `<r>` stanzas */
+        conn->sm_state->r_sent = 0;
+    }
     /* Finally drop the element */
-    return _drop_send_queue_element(conn, t);
+    char *r = _drop_send_queue_element(conn, t);
+    trigger_sm_callback(conn);
+    return r;
 }
 
 /* timed handler for cleanup if normal disconnect procedure takes too long */
@@ -1678,6 +2020,7 @@ static void _handle_stream_end(char *name, void *userdata)
     strophe_debug(conn->ctx, "xmpp", "RECV: </stream:stream>");
     /* the session has been terminated properly, i.e. it can't be resumed */
     conn->sm_state->can_resume = 0;
+    trigger_sm_callback(conn);
     conn_disconnect_clean(conn);
 }
 
@@ -1753,6 +2096,7 @@ static void _conn_sm_handle_stanza(xmpp_conn_t *const conn,
             conn->sm_state->r_sent = 0;
         }
     }
+    trigger_sm_callback(conn);
 }
 
 static unsigned short _conn_default_port(xmpp_conn_t *conn,
@@ -2039,8 +2383,10 @@ static int _send_raw(xmpp_conn_t *conn,
     strophe_debug_verbose(1, conn->ctx, "conn", "Q_ADD: %p", item);
     if (!(owner & XMPP_QUEUE_SM) && conn->sm_state->sm_enabled &&
         !conn->sm_state->r_sent) {
-        send_raw(conn, req_ack, strlen(req_ack), XMPP_QUEUE_SM_STROPHE, item);
         conn->sm_state->r_sent = 1;
+        send_raw(conn, req_ack, strlen(req_ack), XMPP_QUEUE_SM_STROPHE, item);
+    } else {
+        trigger_sm_callback(conn);
     }
     return XMPP_EOK;
 }

@@ -1,7 +1,11 @@
 # Vendored C library versions
-libstrophe: 0.13.1 (latest stable as of 2024)
+libstrophe: master @ f5498506c8a600d1400cc4ae960d79b08c03033d (0.14.0-26-gf549850, 2026-11-17)
 expat: 2.6.4 (R_2_6_4)
 
 # Source URLs
-libstrophe: https://github.com/strophe/libstrophe/releases/tag/0.13.1
+libstrophe: https://github.com/strophe/libstrophe/tree/f5498506c8a600d1400cc4ae960d79b08c03033d
 expat: https://github.com/libexpat/libexpat/releases/tag/R_2_6_4
+
+# Local modifications
+libstrophe: license headers rewritten to MIT (upstream is MIT OR GPL-3.0);
+            tls_dummy.c not vendored (rustls backend only).

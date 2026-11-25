@@ -18,6 +18,7 @@
 #define __LIBSTROPHE_STROPHE_H__
 
 #include <stddef.h> /* size_t */
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -187,6 +188,7 @@ typedef struct _xmpp_sm_t xmpp_sm_state_t;
 #define XMPP_CONN_FLAG_DISABLE_TLS (1UL << 0)
 #define XMPP_CONN_FLAG_MANDATORY_TLS (1UL << 1)
 #define XMPP_CONN_FLAG_LEGACY_SSL (1UL << 2)
+#define XMPP_CONN_FLAG_DIRECT_TLS XMPP_CONN_FLAG_LEGACY_SSL
 /** @def XMPP_CONN_FLAG_TRUST_TLS
  *  Trust server's certificate even if it is invalid.
  */
@@ -249,17 +251,18 @@ typedef enum {
  *  @ingroup TLS
  */
 typedef enum {
-    XMPP_CERT_VERSION,            /**< X.509 Version */
-    XMPP_CERT_SERIALNUMBER,       /**< SerialNumber */
-    XMPP_CERT_SUBJECT,            /**< Subject */
-    XMPP_CERT_ISSUER,             /**< Issuer */
-    XMPP_CERT_NOTBEFORE,          /**< Issued on */
-    XMPP_CERT_NOTAFTER,           /**< Expires on */
-    XMPP_CERT_KEYALG,             /**< Public Key Algorithm */
-    XMPP_CERT_SIGALG,             /**< Certificate Signature Algorithm */
-    XMPP_CERT_FINGERPRINT_SHA1,   /**< Fingerprint SHA-1 */
-    XMPP_CERT_FINGERPRINT_SHA256, /**< Fingerprint SHA-256 */
-    XMPP_CERT_ELEMENT_MAX         /**< Last element of the enum */
+    XMPP_CERT_VERSION,                   /**< X.509 Version */
+    XMPP_CERT_SERIALNUMBER,              /**< SerialNumber */
+    XMPP_CERT_SUBJECT,                   /**< Subject */
+    XMPP_CERT_ISSUER,                    /**< Issuer */
+    XMPP_CERT_NOTBEFORE,                 /**< Issued on */
+    XMPP_CERT_NOTAFTER,                  /**< Expires on */
+    XMPP_CERT_KEYALG,                    /**< Public Key Algorithm */
+    XMPP_CERT_SIGALG,                    /**< Certificate Signature Algorithm */
+    XMPP_CERT_FINGERPRINT_SHA1,          /**< Fingerprint SHA-1 */
+    XMPP_CERT_FINGERPRINT_SHA256,        /**< Fingerprint SHA-256 */
+    XMPP_CERT_PUBKEY_FINGERPRINT_SHA256, /**< SHA-256 fingerprint of pubkey */
+    XMPP_CERT_ELEMENT_MAX                /**< Last element of the enum */
 } xmpp_cert_element_t;
 
 typedef struct {
@@ -414,8 +417,38 @@ typedef enum {
 char *xmpp_conn_send_queue_drop_element(xmpp_conn_t *conn,
                                         xmpp_queue_element_t which);
 
-xmpp_sm_state_t *xmpp_conn_get_sm_state(xmpp_conn_t *conn);
 int xmpp_conn_set_sm_state(xmpp_conn_t *conn, xmpp_sm_state_t *sm_state);
+xmpp_sm_state_t *xmpp_conn_get_sm_state(xmpp_conn_t *conn);
+
+/** The function which will be called when Strophe updates its internal SM
+ *  state.
+ *
+ *  Please note that you have to create a copy of the buffer, since the library
+ *  will free the buffer right after return of the callback function.
+ *
+ *
+ *  @param conn            The Strophe connection object this callback
+ *                         originates from.
+ *  @param ctx             The `ctx` pointer as passed to
+ *                         \ref xmpp_conn_set_sm_callback
+ *  @param sm_state        A pointer to a buffer containing the serialized SM
+ *                         state.
+ *  @param sm_state_len    The length of `sm_state`.
+ *
+ *  @return 0 on success, -1 on error
+ *
+ *  @ingroup Connections
+ */
+typedef void (*xmpp_sm_callback)(xmpp_conn_t *conn,
+                                 void *ctx,
+                                 const unsigned char *sm_state,
+                                 size_t sm_state_len);
+void xmpp_conn_set_sm_callback(xmpp_conn_t *conn,
+                               xmpp_sm_callback cb,
+                               void *ctx);
+int xmpp_conn_restore_sm_state(xmpp_conn_t *conn,
+                               const unsigned char *sm_state,
+                               size_t sm_state_len);
 
 void xmpp_free_sm_state(xmpp_sm_state_t *sm_state);
 
@@ -611,6 +644,7 @@ void xmpp_ctx_set_timeout(xmpp_ctx_t *ctx, unsigned long timeout);
 
 xmpp_ctx_t *xmpp_tlscert_get_ctx(const xmpp_tlscert_t *cert);
 xmpp_conn_t *xmpp_tlscert_get_conn(const xmpp_tlscert_t *cert);
+void *xmpp_tlscert_get_userdata(const xmpp_tlscert_t *cert);
 const char *xmpp_tlscert_get_pem(const xmpp_tlscert_t *cert);
 const char *xmpp_tlscert_get_dnsname(const xmpp_tlscert_t *cert, size_t n);
 const char *xmpp_tlscert_get_string(const xmpp_tlscert_t *cert,

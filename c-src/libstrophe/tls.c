@@ -29,6 +29,10 @@
 #include "strophe.h"
 
 #include "common.h"
+#ifdef _MSC_VER
+#include <BaseTsd.h>
+typedef SSIZE_T ssize_t;
+#endif
 
 const struct conn_interface tls_intf = {
     tls_read,
@@ -74,6 +78,23 @@ xmpp_conn_t *xmpp_tlscert_get_conn(const xmpp_tlscert_t *cert)
     return cert->conn;
 }
 
+/** Get the userdata of a Strophe connection which is assigned to this
+ *  certificate.
+ *
+ *  @param cert a Strophe TLS certificate object
+ *
+ *  @return the userdata of a Strophe connection object where this certificate
+ *  originates from
+ *
+ *  @ingroup TLS
+ */
+void *xmpp_tlscert_get_userdata(const xmpp_tlscert_t *cert)
+{
+    if (cert->conn == NULL)
+        return NULL;
+    return cert->conn->userdata;
+}
+
 /** Get the complete PEM of this certificate.
  *
  *  @param cert a Strophe TLS certificate object
@@ -88,8 +109,6 @@ const char *xmpp_tlscert_get_pem(const xmpp_tlscert_t *cert)
 }
 
 /** Get the dnsName entries out of the SubjectAlternativeNames.
- *
- *  Note: Max. `MAX_NUM_DNSNAMES` are supported.
  *
  *  @param cert a Strophe TLS certificate object
  *  @param n which dnsName entry
@@ -145,9 +164,13 @@ const char *xmpp_tlscert_get_description(xmpp_cert_element_t elmnt)
         "Expires On",
         "Public Key Algorithm",
         "Certificate Signature Algorithm",
-        "Fingerprint SHA-1",
-        "Fingerprint SHA-256",
+        "Certificate Fingerprint SHA-1",
+        "Certificate Fingerprint SHA-256",
+        "Public Key Fingerprint SHA-256",
     };
+    STROPHE_STATIC_ASSERT(
+        ARRAY_SIZE(descriptions) == XMPP_CERT_ELEMENT_MAX,
+        "descriptions don't match the number of enum elements");
     if (elmnt < 0 || elmnt >= XMPP_CERT_ELEMENT_MAX)
         return NULL;
     return descriptions[elmnt];
