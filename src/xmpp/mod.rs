@@ -30,6 +30,9 @@ mod ctx;
 mod error;
 mod stanza;
 
+#[cfg(feature = "websocket")]
+pub mod websocket;
+
 pub use cert::{CertElement, TlsCert, TlsCertRef, CERT_ELEMENTS};
 pub use conn::{
     Conn, ConnEvent, ConnFlags, Connection, EventKind, HandlerId, SmState, Socket, StreamError,

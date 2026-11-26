@@ -101,6 +101,57 @@ Notes:
 - `Conn::handler_delete` disables a handler; libstrophe drops it the next time it would fire.
 - A panic inside a callback aborts the process (unwinding into C is not allowed).
 
+### WebSocket API (RFC 7395)
+
+Enable with the `websocket` feature:
+
+```toml
+[dependencies]
+libstrophe-vendored = { git = "...", features = ["websocket"] }
+```
+
+Async WebSocket connection using `smol` runtime:
+
+```rust,no_run
+use libstrophe_vendored::xmpp::websocket::{connect_websocket, WsEvent};
+
+smol::block_on(async {
+    connect_websocket(
+        "wss://example.com:5281/xmpp-websocket",
+        "user@example.com",
+        "password",
+        |event| {
+            match event {
+                WsEvent::Connect => {
+                    println!("Connected!");
+                    true // Continue
+                }
+                WsEvent::Stanza(xml) => {
+                    println!("Received: {}", xml);
+                    true
+                }
+                WsEvent::Disconnect => {
+                    println!("Disconnected");
+                    false // Stop
+                }
+                WsEvent::Error(msg) => {
+                    eprintln!("Error: {}", msg);
+                    false
+                }
+            }
+        }
+    ).await
+});
+```
+
+Features:
+- **RFC 7395 compliant** - Proper `<open/>` / `<close/>` framing
+- **Sub-protocol negotiation** - `Sec-WebSocket-Protocol: xmpp`
+- **Async/await** - Built on `smol` runtime
+- **TLS support** - `wss://` via `futures-rustls`
+
+See `examples/websocket_basic.rs` for a complete example.
+
 ### Examples
 
 Rust ports of the upstream libstrophe C examples, written without `unsafe`:
@@ -117,6 +168,8 @@ Rust ports of the upstream libstrophe C examples, written without `unsafe`:
 | `complex` | `complex.c` | TLS options, certificate printing, certfail, sockopt |
 | `register` | `register.c` | Raw connection, STARTTLS, in-band registration |
 | `chat_actor` | (none) | Actor thread owns `Context`; presence broadcast (show/status), echo reply, cross-thread send queue |
+| `websocket_basic` | (none) | Async WebSocket connection (RFC 7395) |
+| `websocket_bridge` | (none) | WebSocket-to-libstrophe thread bridge with channels |
 
 ```bash
 cargo run --example basic -- --jid user@example.com --pass password
