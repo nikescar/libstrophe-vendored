@@ -21,13 +21,14 @@
 //! ## Security Note
 //!
 //! SASL PLAIN sends password as base64 (encoding, not encryption).
-//! **ONLY use with TLS** (`wss://`), never plain `ws://`.
+//! `wss://` runs a verified TLS handshake (rustls, Mozilla roots); `connect_websocket`
+//! refuses plain `ws://` URLs with `Error::Auth`.
 #![forbid(unsafe_code)]
 #![cfg(feature = "websocket")]
 
 mod common;
 use common::XmppConfig;
-use libstrophe_vendored::xmpp::websocket::{connect_websocket, WsEvent};
+use libstrophe_vendored::xmpp::{websocket::connect_websocket, XmppEvent};
 use std::process::exit;
 
 fn usage(exit_code: i32) -> ! {
@@ -102,20 +103,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     smol::block_on(async {
         connect_websocket(&url, &jid, &password, |event| {
             match event {
-                WsEvent::Connect => {
+                XmppEvent::Connect => {
                     eprintln!("DEBUG: connected and authenticated");
                     eprintln!("DEBUG: (SASL PLAIN auth + resource binding complete)");
                     false // Disconnect immediately (like basic.rs)
                 }
-                WsEvent::Stanza(xml) => {
+                XmppEvent::Stanza(xml) => {
                     eprintln!("DEBUG: received stanza: {}", xml);
                     true // Continue receiving
                 }
-                WsEvent::Disconnect => {
+                XmppEvent::Disconnect => {
                     eprintln!("DEBUG: disconnected");
                     false // Stop
                 }
-                WsEvent::Error(msg) => {
+                XmppEvent::Error(msg) => {
                     eprintln!("ERROR: {}", msg);
                     false // Disconnect on error
                 }

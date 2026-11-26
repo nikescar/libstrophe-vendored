@@ -12,6 +12,8 @@ pub struct XmppConfig {
     pub host: Option<String>,
     pub port: Option<u16>,
     pub ws_url: Option<String>,
+    /// BOSH URL, from `XMPP_BOSH_URL` only (BOSH examples take the CLI URL themselves).
+    pub bosh_url: Option<String>,
 }
 
 impl XmppConfig {
@@ -28,6 +30,7 @@ impl XmppConfig {
     /// - `XMPP_HOST` - Server hostname (optional)
     /// - `XMPP_PORT` - Server port (optional)
     /// - `XMPP_WS_URL` - WebSocket URL (for WebSocket examples)
+    /// - `XMPP_BOSH_URL` - BOSH URL (for BOSH examples)
     pub fn from_env_and_args(
         cli_jid: Option<&str>,
         cli_pass: Option<&str>,
@@ -63,7 +66,9 @@ impl XmppConfig {
             .ok()
             .or_else(|| cli_ws_url.map(String::from));
 
-        Self { jid, password, host, port, ws_url }
+        let bosh_url = env::var("XMPP_BOSH_URL").ok();
+
+        Self { jid, password, host, port, ws_url, bosh_url }
     }
 
     /// Check if configuration is valid (has JID and password)
@@ -139,6 +144,14 @@ mod tests {
         assert_eq!(config.ws_url, Some("wss://env.example.com/ws".to_string()));
 
         env::remove_var("XMPP_WS_URL");
+    }
+
+    #[test]
+    fn test_config_bosh_url() {
+        env::set_var("XMPP_BOSH_URL", "https://env.example.com/http-bind");
+        let config = XmppConfig::from_env_and_args(None, None, None, None, None);
+        assert_eq!(config.bosh_url, Some("https://env.example.com/http-bind".to_string()));
+        env::remove_var("XMPP_BOSH_URL");
     }
 
     #[test]

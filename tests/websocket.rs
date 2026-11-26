@@ -1,8 +1,9 @@
 //! Integration tests for XMPP WebSocket (RFC 7395)
 #![cfg(feature = "websocket")]
 
+use libstrophe_vendored::xmpp::XmppEvent;
 use libstrophe_vendored::xmpp::websocket::{
-    connect_websocket, create_open_frame, parse_frame, FrameType, WsConnection, WsEvent, WsState,
+    connect_websocket, create_open_frame, parse_frame, FrameType, WsConnection, WsState,
 };
 
 /// Test RFC 7395 `<open/>` frame creation
@@ -96,26 +97,36 @@ fn test_connection_state() {
     assert_eq!(conn.state(), WsState::Disconnected);
 }
 
-/// Async test: connect_websocket (will fail until implemented)
+/// `ws://` is refused before any network I/O: SASL PLAIN would leak the password.
 #[test]
 fn test_websocket_connect() {
     smol::block_on(async {
-        // This test will fail because connect_websocket is unimplemented
-        // It serves to document the expected API
         let result = connect_websocket(
             "ws://localhost:5280/xmpp-websocket",
             "test@localhost",
             "password",
-            |_event| false, // Immediately disconnect
+            |_event| false,
         )
         .await;
-
-        // For now, we expect it to fail with unimplemented
-        assert!(
-            result.is_err(),
-            "connect_websocket should return error (not yet implemented)"
-        );
+        assert_eq!(result, Err(libstrophe_vendored::xmpp::Error::Auth));
     })
+}
+
+/// Live login against a real server: `XMPP_WS_URL=wss://… XMPP_JID=… XMPP_PASS=…
+/// cargo test --features websocket -- --ignored live_wss_login`
+#[test]
+#[ignore]
+fn live_wss_login() {
+    let url = std::env::var("XMPP_WS_URL").expect("XMPP_WS_URL");
+    let jid = std::env::var("XMPP_JID").expect("XMPP_JID");
+    let pass = std::env::var("XMPP_PASS").expect("XMPP_PASS");
+    let mut connected = false;
+    let result = smol::block_on(connect_websocket(&url, &jid, &pass, |e| {
+        connected |= e == XmppEvent::Connect;
+        false
+    }));
+    assert_eq!(result, Ok(()));
+    assert!(connected);
 }
 
 /// Async test: event handler receives Connect event
@@ -123,7 +134,7 @@ fn test_websocket_connect() {
 fn test_event_handler_connect() {
     smol::block_on(async {
         // This test documents expected behavior:
-        // Handler should receive WsEvent::Connect when connection succeeds
+        // Handler should receive XmppEvent::Connect when connection succeeds
 
         let mut received_connect = false;
 
@@ -132,7 +143,7 @@ fn test_event_handler_connect() {
             "test@localhost",
             "password",
             |event| {
-                if matches!(event, WsEvent::Connect) {
+                if matches!(event, XmppEvent::Connect) {
                     received_connect = true;
                     false // Disconnect after connect
                 } else {
@@ -152,7 +163,7 @@ fn test_event_handler_connect() {
 fn test_event_handler_stanza() {
     smol::block_on(async {
         // This test documents expected behavior:
-        // Handler should receive WsEvent::Stanza for incoming stanzas
+        // Handler should receive XmppEvent::Stanza for incoming stanzas
 
         let mut received_stanza = false;
 
@@ -161,7 +172,7 @@ fn test_event_handler_stanza() {
             "test@localhost",
             "password",
             |event| {
-                if let WsEvent::Stanza(xml) = event {
+                if let XmppEvent::Stanza(xml) = event {
                     assert!(!xml.is_empty(), "Stanza should not be empty");
                     received_stanza = true;
                     false // Disconnect after stanza

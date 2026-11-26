@@ -41,6 +41,8 @@ Perfect for embedding XMPP in Rust mobile apps (Android/iOS), WASM, or any platf
 - `tls-rustls` *(default)* - rustls + ring TLS backend
 - `libstrophe-0_14` *(default)* - Latest libstrophe API version
 - `buildtime_bindgen` - Regenerate bindings (requires libclang)
+- `websocket` - Async XMPP over WebSocket (RFC 7395), `xmpp::websocket`
+- `bosh` - Async XMPP over BOSH (XEP-0124 / XEP-0206), `xmpp::bosh`
 
 ## Installation
 
@@ -113,7 +115,7 @@ libstrophe-vendored = { git = "...", features = ["websocket"] }
 Async WebSocket connection using `smol` runtime:
 
 ```rust,no_run
-use libstrophe_vendored::xmpp::websocket::{connect_websocket, WsEvent};
+use libstrophe_vendored::xmpp::{websocket::connect_websocket, XmppEvent};
 
 smol::block_on(async {
     connect_websocket(
@@ -122,19 +124,19 @@ smol::block_on(async {
         "password",
         |event| {
             match event {
-                WsEvent::Connect => {
+                XmppEvent::Connect => {
                     println!("Connected!");
                     true // Continue
                 }
-                WsEvent::Stanza(xml) => {
+                XmppEvent::Stanza(xml) => {
                     println!("Received: {}", xml);
                     true
                 }
-                WsEvent::Disconnect => {
+                XmppEvent::Disconnect => {
                     println!("Disconnected");
                     false // Stop
                 }
-                WsEvent::Error(msg) => {
+                XmppEvent::Error(msg) => {
                     eprintln!("Error: {}", msg);
                     false
                 }
@@ -148,9 +150,40 @@ Features:
 - **RFC 7395 compliant** - Proper `<open/>` / `<close/>` framing
 - **Sub-protocol negotiation** - `Sec-WebSocket-Protocol: xmpp`
 - **Async/await** - Built on `smol` runtime
-- **TLS support** - `wss://` via `futures-rustls`
+- **Verified TLS** - `wss://` via `futures-rustls` (ring, Mozilla roots); plain `ws://` is refused with `Error::Auth` because SASL PLAIN would expose the password
 
 See `examples/websocket_basic.rs` for a complete example.
+
+### BOSH API (XEP-0124 / XEP-0206)
+
+Enable with the `bosh` feature. Same `XmppEvent` handler as WebSocket, plus an
+outbound channel for stanzas to send:
+
+```rust,no_run
+use libstrophe_vendored::xmpp::{bosh::connect_bosh, XmppEvent};
+
+let (tx, rx) = async_channel::unbounded::<String>();
+smol::block_on(async {
+    connect_bosh("https://example.com/http-bind", "user@example.com", "password", rx, |event| {
+        match event {
+            XmppEvent::Connect => tx.try_send("<presence/>".into()).is_ok(),
+            XmppEvent::Stanza(xml) => { println!("{xml}"); true }
+            XmppEvent::Disconnect | XmppEvent::Error(_) => false,
+        }
+    })
+    .await
+});
+```
+
+- **Session flow** - session creation, SASL PLAIN, `xmpp:restart`, resource binding, then `Connect`
+- **Long polling** - one request held open for server push, a second for sends (`hold=1`, `requests=2`)
+- **Reliability** - responses processed in `rid` order; a lost request is resent with the same `rid` (up to 3 times)
+- **Clean shutdown** - handler returns `false` or every sender is dropped: `type='terminate'` with unavailable presence
+- **Hand-written HTTP/1.1** - keep-alive, `Content-Length` and chunked bodies; no redirects, proxies, cookies or compression
+- **Verified TLS** - `https://` only; plain `http://` is refused with `Error::Auth`
+- Stanzas without a namespace get `xmlns='jabber:client'`
+
+See `examples/bosh_basic.rs` and `examples/bosh_echo.rs`.
 
 ### Examples
 
@@ -170,6 +203,8 @@ Rust ports of the upstream libstrophe C examples, written without `unsafe`:
 | `chat_actor` | (none) | Actor thread owns `Context`; presence broadcast (show/status), echo reply, cross-thread send queue |
 | `websocket_basic` | (none) | Async WebSocket connection (RFC 7395) |
 | `websocket_bridge` | (none) | WebSocket-to-libstrophe thread bridge with channels |
+| `bosh_basic` | (none) | Async BOSH connection (XEP-0206), connect and terminate |
+| `bosh_echo` | (none) | BOSH echo bot using the outbound channel |
 
 ```bash
 cargo run --example basic -- --jid user@example.com --pass password

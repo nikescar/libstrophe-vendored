@@ -13,7 +13,7 @@
 mod common;
 use async_channel::{bounded, Receiver, Sender};
 use common::XmppConfig;
-use libstrophe_vendored::xmpp::websocket::{connect_websocket, WsEvent};
+use libstrophe_vendored::xmpp::{websocket::connect_websocket, XmppEvent};
 use std::thread;
 use std::time::Duration;
 
@@ -74,10 +74,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let result = connect_websocket(&url, &jid, &password, move |event| {
                 let bridge_event = match event {
-                    WsEvent::Connect => BridgeEvent::WsConnected,
-                    WsEvent::Stanza(xml) => BridgeEvent::WsStanza(xml),
-                    WsEvent::Disconnect => BridgeEvent::WsDisconnected,
-                    WsEvent::Error(msg) => BridgeEvent::WsError(msg),
+                    XmppEvent::Connect => BridgeEvent::WsConnected,
+                    XmppEvent::Stanza(xml) => BridgeEvent::WsStanza(xml),
+                    XmppEvent::Disconnect => BridgeEvent::WsDisconnected,
+                    XmppEvent::Error(msg) => BridgeEvent::WsError(msg),
                 };
 
                 // Send to main thread
