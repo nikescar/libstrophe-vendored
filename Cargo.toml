@@ -16,11 +16,11 @@ x509-parser = { version = "0.16", optional = true }
 sha2 = { version = "0.10", optional = true }
 libc = "0.2"
 
-# WebSocket dependencies
+# WebSocket / BOSH dependencies (smol runtime; TLS via futures-rustls + ring, no tokio)
 smol = { version = "2.0", optional = true }
-async-tungstenite = { version = "0.28", features = ["tokio-rustls-native-certs"], optional = true }
-futures-util = { version = "0.3", features = ["sink"], optional = true }
-futures-rustls = { version = "0.26", optional = true }
+async-tungstenite = { version = "0.28", default-features = false, features = ["handshake", "futures-03-sink"], optional = true }
+futures-util = { version = "0.3", features = ["sink", "io"], optional = true }
+futures-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"], optional = true }
 async-channel = { version = "2.3", optional = true }
 base64 = { version = "0.22", optional = true }
 
@@ -38,7 +38,10 @@ smol-macros = "0.1"
 default = ["libstrophe-0_14", "tls-rustls"]
 buildtime_bindgen = ["bindgen"]
 tls-rustls = ["dep:rustls", "dep:webpki-roots", "dep:rustls-pki-types", "dep:x509-parser", "dep:sha2"]
-websocket = ["dep:smol", "dep:async-tungstenite", "dep:futures-util", "dep:futures-rustls", "dep:async-channel", "dep:base64"]
+# Internal: shared async TCP/TLS transport, auth state machine and event type.
+async-transport = ["tls-rustls", "dep:smol", "dep:futures-util", "dep:futures-rustls", "dep:async-channel", "dep:base64"]
+websocket = ["async-transport", "dep:async-tungstenite"]
+bosh = ["async-transport"]
 libstrophe-0_9_3 = []
 libstrophe-0_10_0 = ["libstrophe-0_9_3"]
 libstrophe-0_11_0 = ["libstrophe-0_10_0"]
@@ -49,3 +52,19 @@ libstrophe-0_14 = ["libstrophe-0_13"]
 [build-dependencies.bindgen]
 version = "0.73"
 optional = true
+
+[[example]]
+name = "websocket_basic"
+required-features = ["websocket"]
+
+[[example]]
+name = "websocket_bridge"
+required-features = ["websocket"]
+
+[[example]]
+name = "bosh_basic"
+required-features = ["bosh"]
+
+[[example]]
+name = "bosh_echo"
+required-features = ["bosh"]

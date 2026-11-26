@@ -30,8 +30,20 @@ mod ctx;
 mod error;
 mod stanza;
 
+#[cfg(feature = "async-transport")]
+mod auth;
+#[cfg(feature = "async-transport")]
+mod event;
+#[cfg(feature = "async-transport")]
+mod net;
+
+#[cfg(feature = "bosh")]
+pub mod bosh;
 #[cfg(feature = "websocket")]
 pub mod websocket;
+
+#[cfg(feature = "async-transport")]
+pub use event::XmppEvent;
 
 pub use cert::{CertElement, TlsCert, TlsCertRef, CERT_ELEMENTS};
 pub use conn::{

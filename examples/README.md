@@ -73,13 +73,7 @@ Demonstrates async WebSocket connection to XMPP server using `smol` runtime.
 #### Usage
 
 ```bash
-# Connect to WebSocket XMPP server
-cargo run --features websocket --example websocket_basic -- \
-  --jid user@example.com \
-  --pass password \
-  ws://example.com:5280/xmpp-websocket
-
-# With TLS (wss://)
+# wss:// only: plain ws:// is refused (SASL PLAIN would expose the password)
 cargo run --features websocket --example websocket_basic -- \
   --jid user@example.com \
   --pass secret \
@@ -92,12 +86,12 @@ cargo run --features websocket --example websocket_basic -- \
 2. **Sub-protocol negotiation** - `Sec-WebSocket-Protocol: xmpp`
 3. **Async WebSocket** - Using `smol::block_on` and `async-tungstenite`
 4. **Event handling** - Connect, Stanza, Disconnect, Error events
-5. **TLS support** - `wss://` URLs with `futures-rustls`
+5. **Verified TLS** - `wss://` URLs with `futures-rustls` (Mozilla roots)
 
 #### Expected Output
 
 ```
-DEBUG: Connecting to ws://localhost:5280/xmpp-websocket as user@localhost
+DEBUG: Connecting to wss://localhost:5281/xmpp-websocket as user@localhost
 DEBUG: connected
 DEBUG: disconnected
 ```
@@ -160,6 +154,32 @@ cargo run --features websocket --example websocket_bridge -- \
 └─────────────────────────────┘
 ```
 
+## BOSH Examples (XEP-0124 / XEP-0206)
+
+### bosh_basic
+
+Connects through a BOSH connection manager, authenticates (SASL PLAIN, stream
+restart, resource binding), then terminates the session.
+
+```bash
+cargo run --features bosh --example bosh_basic -- \
+  --jid user@example.com --pass secret \
+  https://example.com:5281/http-bind
+
+# or
+XMPP_JID=user@example.com XMPP_PASS=secret XMPP_BOSH_URL=https://example.com:5281/http-bind \
+  cargo run --features bosh --example bosh_basic
+```
+
+### bosh_echo
+
+Echo bot: sends `<presence/>`, replies to each chat message with its body, and
+ends on `quit`. Outbound stanzas go through the `async_channel` passed to `connect_bosh`.
+
+```bash
+cargo run --features bosh --example bosh_echo -- user@example.com secret https://example.com:5281/http-bind
+```
+
 ## Testing Without a Server
 
 See `tests/integration.rs` for API tests that don't require a live server.
@@ -171,5 +191,12 @@ cargo test --test integration
 For WebSocket tests:
 
 ```bash
-cargo test --features websocket --test websocket
+cargo test --features websocket
+cargo test --features bosh      # BOSH unit + mock-server tests
+```
+
+Live tests (ignored by default):
+
+```bash
+XMPP_WS_URL=wss://… XMPP_JID=… XMPP_PASS=… cargo test --features websocket -- --ignored live_wss_login
 ```

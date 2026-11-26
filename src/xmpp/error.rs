@@ -17,6 +17,14 @@ pub enum Error {
     Null,
     /// Any other non-zero return code.
     Code(i32),
+    /// Network I/O failed (connect, read, write, timeout).
+    Io,
+    /// TLS handshake or certificate verification failed.
+    Tls,
+    /// Authentication failed or was refused (e.g. SASL `<failure/>`, PLAIN without TLS).
+    Auth,
+    /// Peer violated the wire protocol (bad URL, HTTP status, BOSH/XMPP framing).
+    Protocol,
 }
 
 impl fmt::Display for Error {
@@ -28,6 +36,10 @@ impl fmt::Display for Error {
             Error::Nul => f.write_str("string contains NUL byte"),
             Error::Null => f.write_str("libstrophe returned NULL"),
             Error::Code(c) => write!(f, "libstrophe error code {c}"),
+            Error::Io => f.write_str("network I/O error"),
+            Error::Tls => f.write_str("TLS handshake or certificate verification failed"),
+            Error::Auth => f.write_str("authentication failed"),
+            Error::Protocol => f.write_str("protocol error"),
         }
     }
 }
