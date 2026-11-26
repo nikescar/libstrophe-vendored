@@ -7,6 +7,8 @@
 //! in complicated scenarios.
 #![forbid(unsafe_code)]
 
+mod common;
+use common::XmppConfig;
 use libstrophe_vendored::xmpp::{
     Conn, ConnEvent, Connection, Context, EventKind, HandlerId, LogLevel, Result, Stanza, StanzaRef,
     NS_REGISTER, NS_STREAMS, NS_TLS,
@@ -213,12 +215,33 @@ fn conn_handler(conn: &Conn, event: &ConnEvent<'_>, reg: &Rc<Reg>) {
 
 fn main() -> std::result::Result<ExitCode, Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
-    if !(2..=3).contains(&args.len()) {
-        eprintln!("Usage: {} <jid> [<host>]", args.first().map_or("register", String::as_str));
+
+    // Parse CLI args
+    let (cli_jid, cli_host) = match args.len() {
+        2 => (Some(args[1].as_str()), None),
+        3 => (Some(args[1].as_str()), Some(args[2].as_str())),
+        1 => (None, None),
+        _ => {
+            eprintln!(
+                "Usage: {} [<jid> [<host>]]\n\n\
+                 Environment variables (priority over CLI):\n  \
+                 XMPP_JID    Jabber ID or domain to register\n  \
+                 XMPP_HOST   Server hostname\n",
+                args.first().map_or("register", String::as_str)
+            );
+            return Ok(ExitCode::FAILURE);
+        }
+    };
+
+    // Get configuration (ENV > CLI)
+    let config = XmppConfig::from_env_and_args(cli_jid, None, cli_host, None, None);
+    if config.jid.is_empty() {
+        eprintln!("Error: JID or domain required");
         return Ok(ExitCode::FAILURE);
     }
-    let jid = &args[1];
-    let host = args.get(2).map(String::as_str);
+
+    let jid = &config.jid;
+    let host = config.host.as_deref();
 
     let ctx = Context::with_default_logger(LogLevel::Debug);
     let conn = Connection::new(&ctx);

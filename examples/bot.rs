@@ -2,6 +2,8 @@
 //! Stream Management based reconnect.
 #![forbid(unsafe_code)]
 
+mod common;
+use common::XmppConfig;
 use libstrophe_vendored::xmpp::{
     Conn, ConnEvent, ConnFlags, Connection, Context, ContextRef, EventKind, LogLevel, Result, Stanza,
     StanzaRef,
@@ -128,32 +130,38 @@ fn password_callback(conn: &Conn, pw_max: usize) -> Option<String> {
 
 fn usage(exit_code: i32) -> ! {
     eprint!(
-        "Usage: bot [options] <jid> <pass>\n\n\
+        "Usage: bot [options] [<host> [<port>]]\n\n\
          Options:\n  \
          --jid <jid>              The JID to use to authenticate.\n  \
          --pass <pass>            The password of the JID.\n  \
          --tls-cert <cert>        Path to client certificate.\n  \
-         --tls-key <key>          Path to private key or P12 file.\n\n  \
+         --tls-key <key>          Path to private key or P12 file.\n  \
          --tcp-keepalive          Configure TCP keepalive.\n  \
          --disable-tls            Disable TLS.\n  \
          --mandatory-tls          Deny plaintext connection.\n  \
          --trust-tls              Trust TLS certificate.\n  \
          --legacy-ssl             Use old style SSL.\n  \
-         --legacy-auth            Allow legacy authentication.\n\
-         Note: --disable-tls conflicts with --mandatory-tls or --legacy-ssl\n  \
+         --legacy-auth            Allow legacy authentication.\n  \
          --zlib                   Enable compression via zlib.\n  \
-         --dont-reset             When using zlib, don't do a full-flush after compression.\n"
+         --dont-reset             When using zlib, don't do a full-flush after compression.\n\n\
+         Environment variables (priority over CLI):\n  \
+         XMPP_JID                 Jabber ID\n  \
+         XMPP_PASS                Password\n  \
+         XMPP_HOST                Server hostname\n  \
+         XMPP_PORT                Server port\n\n\
+         Note: --disable-tls conflicts with --mandatory-tls or --legacy-ssl\n"
     );
     exit(exit_code)
 }
 
 fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
-    let (mut jid, mut password, mut cert, mut key) = (None, None, None, None);
+    let (mut cli_jid, mut cli_pass, mut cli_host, mut cli_port) = (None, None, None, None);
+    let (mut cert, mut key) = (None, None);
     let mut flags = ConnFlags::empty();
     let mut tcp_keepalive = false;
 
-    // take a jid and password on the command line
+    // Parse command-line arguments
     let mut i = 1;
     while i < args.len() {
         let has_value = i + 1 < args.len();
@@ -170,8 +178,14 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             "--legacy-auth" => flags |= ConnFlags::LEGACY_AUTH,
             "--zlib" => flags |= ConnFlags::ENABLE_COMPRESSION,
             "--dont-reset" => flags |= ConnFlags::COMPRESSION_DONT_RESET,
-            "--jid" if has_value => jid = value(&mut i),
-            "--pass" if has_value => password = value(&mut i),
+            "--jid" if has_value => {
+                i += 1;
+                cli_jid = Some(args[i].as_str());
+            }
+            "--pass" if has_value => {
+                i += 1;
+                cli_pass = Some(args[i].as_str());
+            }
             "--tls-cert" if has_value => cert = value(&mut i),
             "--tls-key" if has_value => key = value(&mut i),
             "--tcp-keepalive" => tcp_keepalive = true,
@@ -179,11 +193,24 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         }
         i += 1;
     }
-    if (jid.is_none() && key.is_none()) || args.len() - i > 2 {
+
+    // Parse positional host/port
+    if i < args.len() {
+        cli_host = Some(args[i].as_str());
+        if i + 1 < args.len() {
+            cli_port = args[i + 1].parse::<u16>().ok();
+        }
+    }
+
+    // Get configuration (ENV > CLI)
+    let config = XmppConfig::from_env_and_args(cli_jid, cli_pass, cli_host, cli_port, None);
+    if !config.is_valid() && key.is_none() {
+        eprintln!("Error: JID and password required (or client certificate)\n");
         usage(1);
     }
-    let host = args.get(i).map(String::as_str);
-    let port = args.get(i + 1).map_or(0, |p| p.parse::<u16>().unwrap_or(0));
+
+    let host = config.host.as_deref();
+    let port = config.port.unwrap_or(0);
 
     // pass Context::new() instead to silence output
     let ctx = Context::with_default_logger(LogLevel::Debug);
@@ -205,11 +232,9 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         if let Some(key) = &key {
             conn.set_client_cert(cert.as_deref(), key)?;
         }
-        if let Some(jid) = &jid {
-            conn.set_jid(jid)?;
-        }
-        if let Some(password) = &password {
-            conn.set_pass(password)?;
+        if config.is_valid() {
+            conn.set_jid(&config.jid)?;
+            conn.set_pass(&config.password)?;
         }
 
         // enable TCP keepalive, using canned callback function

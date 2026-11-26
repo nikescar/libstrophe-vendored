@@ -10,7 +10,9 @@
 #![forbid(unsafe_code)]
 #![cfg(feature = "websocket")]
 
+mod common;
 use async_channel::{bounded, Receiver, Sender};
+use common::XmppConfig;
 use libstrophe_vendored::xmpp::websocket::{connect_websocket, WsEvent};
 use std::thread;
 use std::time::Duration;
@@ -27,17 +29,38 @@ enum BridgeEvent {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
 
-    if args.len() != 4 {
-        eprintln!("Usage: websocket_bridge <url> <jid> <password>");
-        eprintln!();
-        eprintln!("Example:");
-        eprintln!("  websocket_bridge ws://localhost:5280/xmpp-websocket user@localhost secret");
+    // Parse CLI args
+    let (cli_url, cli_jid, cli_pass) = match args.len() {
+        4 => (Some(args[1].as_str()), Some(args[2].as_str()), Some(args[3].as_str())),
+        1 => (None, None, None),
+        _ => {
+            eprintln!(
+                "Usage: websocket_bridge [<url> <jid> <password>]\n\n\
+                 Environment variables (priority over CLI):\n  \
+                 XMPP_WS_URL   WebSocket URL\n  \
+                 XMPP_JID      Jabber ID\n  \
+                 XMPP_PASS     Password\n\n\
+                 Example:\n  \
+                 websocket_bridge wss://xmpp.example.com/websocket user@example.com secret\n"
+            );
+            std::process::exit(1);
+        }
+    };
+
+    // Get configuration (ENV > CLI)
+    let config = XmppConfig::from_env_and_args(cli_jid, cli_pass, None, None, cli_url);
+    if !config.is_valid() {
+        eprintln!("Error: JID and password required");
+        std::process::exit(1);
+    }
+    if config.ws_url.is_none() {
+        eprintln!("Error: WebSocket URL required");
         std::process::exit(1);
     }
 
-    let url = args[1].clone();
-    let jid = args[2].clone();
-    let password = args[3].clone();
+    let url = config.ws_url.unwrap();
+    let jid = config.jid;
+    let password = config.password;
 
     // Create channel for WebSocket -> Main communication
     let (ws_tx, ws_rx) = bounded::<BridgeEvent>(100);

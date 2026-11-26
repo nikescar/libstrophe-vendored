@@ -16,6 +16,8 @@
 //!   /presence [away|chat|dnd|xa] [text]  broadcast availability/status
 #![forbid(unsafe_code)]
 
+mod common;
+use common::XmppConfig;
 use libstrophe_vendored::xmpp::{
     Conn, Connection, Context, ContextRef, EventKind, LogLevel, Result, Stanza, StanzaRef,
 };
@@ -158,14 +160,45 @@ fn parse_command(line: &str) -> Option<Outgoing> {
 
 fn main() {
     let mut args = std::env::args().skip(1);
-    let (Some(jid), Some(pass)) = (args.next(), args.next()) else {
-        eprintln!("Usage: chat_actor <jid> <pass> [<host> [<port>]]");
-        std::process::exit(1);
+
+    // Parse CLI args
+    let (cli_jid, cli_pass, cli_host, cli_port) = match (args.next(), args.next(), args.next(), args.next()) {
+        (Some(jid), Some(pass), host, port) => {
+            let port_val = port.and_then(|p| p.parse().ok());
+            (Some(jid), Some(pass), host, port_val)
+        }
+        (None, None, None, None) => (None, None, None, None),
+        _ => {
+            eprintln!(
+                "Usage: chat_actor [<jid> <pass> [<host> [<port>]]]\n\n\
+                 Environment variables (priority over CLI):\n  \
+                 XMPP_JID    Jabber ID\n  \
+                 XMPP_PASS   Password\n  \
+                 XMPP_HOST   Server hostname\n  \
+                 XMPP_PORT   Server port\n"
+            );
+            std::process::exit(1);
+        }
     };
-    let host = args.next();
-    let port = args.next().and_then(|p| p.parse().ok()).unwrap_or(0);
+
+    // Get configuration (ENV > CLI)
+    let config = XmppConfig::from_env_and_args(
+        cli_jid.as_deref(),
+        cli_pass.as_deref(),
+        cli_host.as_deref(),
+        cli_port,
+        None,
+    );
+    if !config.is_valid() {
+        eprintln!("Error: JID and password required");
+        std::process::exit(1);
+    }
 
     let (tx, rx) = mpsc::channel();
+    let jid = config.jid;
+    let pass = config.password;
+    let host = config.host;
+    let port = config.port.unwrap_or(0);
     let actor = std::thread::spawn(move || actor(jid, pass, host, port, rx));
 
     // Any thread can hold a Sender; here the main thread feeds it from stdin.

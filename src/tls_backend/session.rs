@@ -105,31 +105,19 @@ impl TlsSession {
         })
     }
 
-    /// Perform TLS handshake
+    /// Perform TLS handshake (matches OpenSSL convention)
     ///
-    /// Returns 0 on success, -1 on error
+    /// Returns 1 on success, 0 on failure
+    /// ponytail: Loops until handshake completes, using select() for would-block
     pub fn start(&mut self) -> c_int {
         let mut raw_sock = RawSock::new(self.sock);
 
-        // Drive handshake until complete or would block
+        // Drive handshake until complete or fatal error
         loop {
-            if !self.conn.is_handshaking() {
-                // Handshake complete - save peer certificates and extract XMPP addrs
-                if let Some(certs) = self.conn.peer_certificates() {
-                    self.peer_certs = certs.iter().cloned().collect();
-                    if !self.peer_certs.is_empty() {
-                        if let Ok(addrs) = cert::extract_xmpp_addrs(&self.peer_certs[0]) {
-                            self.xmpp_addrs = cert::strings_to_c(addrs);
-                        }
-                    }
-                }
-                return 0;
-            }
-
             match self.conn.complete_io(&mut raw_sock) {
                 Ok(_) => {
                     if !self.conn.is_handshaking() {
-                        // Handshake complete - save peer certificates and extract XMPP addrs
+                        // Handshake complete - save peer certificates
                         if let Some(certs) = self.conn.peer_certificates() {
                             self.peer_certs = certs.iter().cloned().collect();
                             if !self.peer_certs.is_empty() {
@@ -138,18 +126,47 @@ impl TlsSession {
                                 }
                             }
                         }
-                        return 0;
+                        return 1; // Success
                     }
                 }
                 Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                    // Wait for socket ready using select()
                     self.last_errno = EAGAIN;
-                    return 0; // Need more data, return success (non-blocking)
+                    self.sock_wait();
+                    continue;
                 }
                 Err(e) => {
+                    // Fatal error
                     self.last_errno = e.raw_os_error().unwrap_or(libc::EIO);
-                    return -1;
+                    return 0; // Failure
                 }
             }
+        }
+    }
+
+    /// Wait for socket readable/writable (mimics OpenSSL _tls_sock_wait)
+    fn sock_wait(&self) {
+        use libc::{fd_set, timeval, FD_SET, FD_ZERO};
+        unsafe {
+            let mut rfds: fd_set = std::mem::zeroed();
+            let mut wfds: fd_set = std::mem::zeroed();
+            FD_ZERO(&mut rfds);
+            FD_ZERO(&mut wfds);
+            FD_SET(self.sock, &mut rfds);
+            FD_SET(self.sock, &mut wfds);
+
+            let mut tv = timeval {
+                tv_sec: 1,
+                tv_usec: 0,
+            };
+
+            libc::select(
+                self.sock + 1,
+                &mut rfds,
+                &mut wfds,
+                std::ptr::null_mut(),
+                &mut tv,
+            );
         }
     }
 
@@ -179,6 +196,11 @@ impl TlsSession {
                 self.last_errno = EAGAIN;
                 0
             }
+            Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => {
+                // ponytail: rustls strict on close_notify; treat as ECONNRESET for broken proxies
+                self.last_errno = libc::ECONNRESET;
+                -1
+            }
             Err(e) => {
                 self.last_errno = e.raw_os_error().unwrap_or(libc::EIO);
                 -1
@@ -190,10 +212,8 @@ impl TlsSession {
     ///
     /// Returns number of bytes written, 0 on EAGAIN, -1 on error
     pub fn write(&mut self, buf: &[u8]) -> ssize_t {
-        // Write plaintext to TLS session
         match self.conn.writer().write(buf) {
             Ok(n) => {
-                // Flush encrypted data to socket
                 let mut raw_sock = RawSock::new(self.sock);
                 match self.conn.complete_io(&mut raw_sock) {
                     Ok(_) => n as ssize_t,

@@ -1,6 +1,8 @@
 //! Port of libstrophe `examples/vcard.c`: fetch and print someone's vCard.
 #![forbid(unsafe_code)]
 
+mod common;
+use common::XmppConfig;
 use libstrophe_vendored::xmpp::{Conn, ConnEvent, Connection, Context, EventKind, LogLevel, StanzaRef};
 use std::path::Path;
 use std::process::ExitCode;
@@ -151,28 +153,46 @@ fn conn_handler(conn: &Conn, event: &ConnEvent<'_>, vc: &Rc<Vcard>) {
 
 fn main() -> Result<ExitCode, Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
-    if !(4..=5).contains(&args.len()) {
-        let prog = args
-            .first()
-            .and_then(|a| Path::new(a).file_name())
-            .map_or("vcard".into(), |n| n.to_string_lossy());
-        print!("Usage: {prog} <login-jid> <password> <recipient-jid> [image-file]\n\n");
-        println!(
-            "If vCard contains a photo it will be stored to image-file. If you don't \
-             provide the image-file default filename will be generated."
-        );
+
+    // Parse CLI args
+    let (cli_jid, cli_pass, recipient, img_path) = match args.len() {
+        4 => (Some(args[1].as_str()), Some(args[2].as_str()), args[3].clone(), "vcard.jpg".to_string()),
+        5 => (Some(args[1].as_str()), Some(args[2].as_str()), args[3].clone(), args[4].clone()),
+        1..=2 => (None, None, String::new(), String::new()),
+        _ => {
+            let prog = args
+                .first()
+                .and_then(|a| Path::new(a).file_name())
+                .map_or("vcard".into(), |n| n.to_string_lossy());
+            print!(
+                "Usage: {prog} [<login-jid> <password>] <recipient-jid> [image-file]\n\n\
+                 If vCard contains a photo it will be stored to image-file. If you don't \
+                 provide the image-file default filename will be generated.\n\n\
+                 Environment variables (priority over CLI):\n  \
+                 XMPP_JID    Login JID\n  \
+                 XMPP_PASS   Password\n"
+            );
+            return Ok(ExitCode::FAILURE);
+        }
+    };
+
+    // Get configuration (ENV > CLI)
+    let config = XmppConfig::from_env_and_args(cli_jid, cli_pass, None, None, None);
+    if !config.is_valid() {
+        eprintln!("Error: JID and password required");
+        return Ok(ExitCode::FAILURE);
+    }
+    if recipient.is_empty() {
+        eprintln!("Error: recipient JID required");
         return Ok(ExitCode::FAILURE);
     }
 
-    let vcard = Rc::new(Vcard {
-        recipient: args[3].clone(),
-        img_path: args.get(4).cloned().unwrap_or_else(|| "vcard.jpg".into()),
-    });
+    let vcard = Rc::new(Vcard { recipient, img_path });
 
     let ctx = Context::with_default_logger(LogLevel::Info);
     let conn = Connection::new(&ctx);
-    conn.set_jid(&args[1])?;
-    conn.set_pass(&args[2])?;
+    conn.set_jid(&config.jid)?;
+    conn.set_pass(&config.password)?;
     conn.connect_client(None, 0, move |c, e| conn_handler(c, e, &vcard))?;
     ctx.run();
     Ok(ExitCode::SUCCESS)

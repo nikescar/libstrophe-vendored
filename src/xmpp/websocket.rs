@@ -25,7 +25,7 @@ use async_tungstenite::{
     WebSocketStream,
 };
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
-use futures_util::{SinkExt, StreamExt};
+use futures_util::StreamExt;
 use smol::net::TcpStream;
 
 /// WebSocket connection event
@@ -151,7 +151,7 @@ where
     // Create WebSocket request with XMPP sub-protocol
     let mut request: Request = url
         .into_client_request()
-        .map_err(|e| Error::InvalidOp)?; // ponytail: reuse existing error type
+        .map_err(|_e| Error::InvalidOp)?; // ponytail: reuse existing error type
 
     request
         .headers_mut()

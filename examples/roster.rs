@@ -1,6 +1,8 @@
 //! Port of libstrophe `examples/roster.c`: print the roster.
 #![forbid(unsafe_code)]
 
+mod common;
+use common::XmppConfig;
 use libstrophe_vendored::xmpp::{
     Conn, ConnEvent, Connection, Context, EventKind, Result, Stanza, StanzaRef, NS_ROSTER,
 };
@@ -59,8 +61,26 @@ fn conn_handler(conn: &Conn, event: &ConnEvent<'_>) {
 
 fn main() -> std::result::Result<ExitCode, Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
-    if args.len() != 3 {
-        eprint!("Usage: roster <jid> <pass>\n\n");
+
+    // Parse CLI args
+    let (cli_jid, cli_pass) = match args.len() {
+        3 => (Some(args[1].as_str()), Some(args[2].as_str())),
+        1 => (None, None),
+        _ => {
+            eprint!(
+                "Usage: roster [<jid> <pass>]\n\n\
+                 Environment variables (priority over CLI):\n  \
+                 XMPP_JID    Jabber ID\n  \
+                 XMPP_PASS   Password\n\n"
+            );
+            return Ok(ExitCode::FAILURE);
+        }
+    };
+
+    // Get configuration (ENV > CLI)
+    let config = XmppConfig::from_env_and_args(cli_jid, cli_pass, None, None, None);
+    if !config.is_valid() {
+        eprint!("Error: JID and password required\n");
         return Ok(ExitCode::FAILURE);
     }
 
@@ -70,8 +90,8 @@ fn main() -> std::result::Result<ExitCode, Box<dyn std::error::Error>> {
     // connection without STARTTLS: see Conn::set_flags() or examples/basic.rs
 
     // setup authentication information
-    conn.set_jid(&args[1])?;
-    conn.set_pass(&args[2])?;
+    conn.set_jid(&config.jid)?;
+    conn.set_pass(&config.password)?;
 
     // initiate connection
     conn.connect_client(None, 0, conn_handler)?;
